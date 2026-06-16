@@ -157,8 +157,12 @@
   };
   let bullets = [];
   let asteroids = [];
+  let aliens = [];
   let particles = [];
+  let alienTimer = 0;
   const keys = {};
+  const ALIEN_RADIUS = 18;
+  const ALIEN_SCORE = 200;
 
   // ---------------- HELPERS ----------------
   function rndShape(radius, n=12) {
@@ -213,6 +217,17 @@
     }
   }
 
+  function spawnAlien() {
+    const fromLeft = Math.random() < 0.5;
+    const x = fromLeft ? -ALIEN_RADIUS : W + ALIEN_RADIUS;
+    const y = 60 + Math.random() * (H - 120);
+    const sp = 70 + Math.random() * 60 + wave * 3;
+    const vx = fromLeft ? sp : -sp;
+    const vy = (Math.random() - 0.5) * 40;
+    aliens.push({ x, y, vx, vy, zig: 0 });
+    beep(440, 0.12, 'square', 0.06, 320);
+  }
+
   function splitAsteroid(a) {
     if (a.size > 1) {
       for (let i = 0; i < 2; i++) {
@@ -248,7 +263,8 @@
     ship.vx = 0; ship.vy = 0; ship.a = -Math.PI/2;
     ship.alive = true; ship.invuln = 2; ship.respawn = 0;
     ship.thrusting = false;
-    bullets = []; particles = [];
+    bullets = []; particles = []; aliens = [];
+    alienTimer = 8 + Math.random() * 6;
     spawnWave(4);
   }
 
@@ -363,6 +379,21 @@
       wrap(a);
     }
 
+    // aliens (cross the screen with a slight zigzag, then vanish off the far edge)
+    for (const al of aliens) {
+      al.zig += dt;
+      al.x += al.vx * dt;
+      al.y += al.vy * dt + Math.sin(al.zig * 2.4) * 30 * dt;
+    }
+    aliens = aliens.filter(al => al.x > -ALIEN_RADIUS * 2 && al.x < W + ALIEN_RADIUS * 2);
+
+    // alien spawn timer
+    alienTimer -= dt;
+    if (alienTimer <= 0 && aliens.length < 2) {
+      spawnAlien();
+      alienTimer = 10 + Math.random() * 8 - Math.min(6, wave * 0.4);
+    }
+
     // bullet x asteroid
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
@@ -383,28 +414,53 @@
       }
     }
 
-    // ship x asteroid
+    // bullet x alien
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      for (let j = aliens.length - 1; j >= 0; j--) {
+        const al = aliens[j];
+        const dx = b.x - al.x, dy = b.y - al.y;
+        if (dx*dx + dy*dy < ALIEN_RADIUS * ALIEN_RADIUS) {
+          bullets.splice(i, 1);
+          explode(al.x, al.y, 22, '#5fff8f', 1.1);
+          noiseBurst(0.3, 0.4, 2200);
+          beep(660, 0.18, 'sawtooth', 0.1, 110);
+          score += ALIEN_SCORE;
+          aliens.splice(j, 1);
+          break;
+        }
+      }
+    }
+
+    // ship x asteroid / alien
+    function killShip() {
+      ship.alive = false;
+      ship.respawn = 2.2;
+      lives--;
+      explode(ship.x, ship.y, 36, '#fff', 1.2);
+      noiseBurst(0.7, 0.55, 1000);
+      beep(220, 0.5, 'sawtooth', 0.15, 60);
+      flashTimer = 0.25;
+      stopThrust();
+      if (lives <= 0) {
+        setTimeout(() => {
+          if (score > hiscore) hiscore = score;
+          state = STATE.GAMEOVER;
+        }, 2200);
+      }
+    }
     if (ship.alive && ship.invuln <= 0) {
       for (const a of asteroids) {
         const dx = ship.x - a.x, dy = ship.y - a.y;
         const r = a.radius + 9;
-        if (dx*dx + dy*dy < r*r) {
-          ship.alive = false;
-          ship.respawn = 2.2;
-          lives--;
-          explode(ship.x, ship.y, 36, '#fff', 1.2);
-          noiseBurst(0.7, 0.55, 1000);
-          beep(220, 0.5, 'sawtooth', 0.15, 60);
-          flashTimer = 0.25;
-          stopThrust();
-          if (lives <= 0) {
-            setTimeout(() => {
-              if (score > hiscore) hiscore = score;
-              state = STATE.GAMEOVER;
-            }, 2200);
-          }
-          break;
-        }
+        if (dx*dx + dy*dy < r*r) { killShip(); break; }
+      }
+    }
+    if (ship.alive && ship.invuln <= 0) {
+      for (const al of aliens) {
+        const dx = ship.x - al.x, dy = ship.y - al.y;
+        const r = ALIEN_RADIUS + 9;
+        if (dx*dx + dy*dy < r*r) { killShip(); break; }
       }
     }
 
@@ -479,6 +535,32 @@
     ctx.restore();
   }
 
+  function drawAlien(al) {
+    ctx.save();
+    ctx.translate(al.x, al.y);
+    ctx.strokeStyle = '#5fff8f';
+    ctx.lineWidth = 2;
+    // saucer body (hexagonal disc)
+    strokePath([
+      { x: -16, y: 0 },
+      { x: -9,  y: -5 },
+      { x: 9,   y: -5 },
+      { x: 16,  y: 0 },
+      { x: 9,   y: 5 },
+      { x: -9,  y: 5 },
+    ]);
+    // dome
+    ctx.beginPath();
+    ctx.arc(0, -5, 6, Math.PI, 0);
+    ctx.stroke();
+    // belt line
+    ctx.beginPath();
+    ctx.moveTo(-16, 0);
+    ctx.lineTo(16, 0);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawBullet(b) {
     ctx.fillStyle = '#fff';
     ctx.beginPath();
@@ -533,6 +615,7 @@
 
     for (const p of particles) drawParticle(p);
     for (const a of asteroids) drawAsteroid(a);
+    for (const al of aliens) drawAlien(al);
     for (const b of bullets) drawBullet(b);
     drawShip();
 
